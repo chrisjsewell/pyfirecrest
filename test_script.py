@@ -70,6 +70,9 @@ class Transport:
         files = self.client.list_files(self.machine_name, path)
         return [f['name'] for f in files]
     
+    def mkdir(self, path: str):
+        """Create a directory."""
+        self.client.mkdir(self.machine_name, path, True)
 
 
 if __name__ == "__main__":
@@ -84,6 +87,8 @@ if __name__ == "__main__":
     )
 
     transport = Transport(client, "daint")
+    # transport.mkdir("/scratch/a")  # TODO returns firecrest.FirecrestException.HeaderException, maybe convert to standard exceptions
+    transport.mkdir("/scratch/snx3000/csewell/other")
     print(transport.listdir("/scratch/snx3000/csewell/"))
 
     # systems = client.all_systems()

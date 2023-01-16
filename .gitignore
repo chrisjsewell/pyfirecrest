@@ -19,3 +19,6 @@ var/
 # Ignore Mac DS_Store files
 .DS_Store
 __pycache__
+conda
+.fclient.yaml
+.vscode/

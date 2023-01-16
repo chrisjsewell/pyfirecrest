@@ -4,7 +4,10 @@
 #  Please, refer to the LICENSE file in the root directory.
 #  SPDX-License-Identifier: BSD-3-Clause
 #
+from __future__ import annotations
+
 import itertools
+from typing import Iterable
 import jwt
 import pathlib
 import requests
@@ -15,9 +18,11 @@ import time
 import urllib.request
 
 import firecrest.FirecrestException as fe
+import firecrest.result_types as t
 
 from contextlib import nullcontext
 from requests.compat import json
+
 
 # This function is temporarily here
 def handle_response(response):
@@ -272,6 +277,7 @@ class Firecrest:
             verify=self._verify,
             timeout=self.timeout,
         )
+
         return resp
 
     def _post_request(self, endpoint, additional_headers=None, data=None, files=None):
@@ -320,7 +326,7 @@ class Firecrest:
         )
         return resp
 
-    def _json_response(self, responses, expected_status_code):
+    def _json_response(self, responses: list[requests.Response], expected_status_code):
         # Will examine only the last response
         response = responses[-1]
         status_code = response.status_code
@@ -462,7 +468,7 @@ class Firecrest:
         return self._json_response([resp], 200)["out"]
 
     # Utilities
-    def list_files(self, machine, target_path, show_hidden=None):
+    def list_files(self, machine, target_path, show_hidden=None) -> list[t.LsFile]:
         """Returns a list of files in a directory.
 
         :param machine: the machine name where the filesystem belongs to
@@ -484,6 +490,37 @@ class Firecrest:
             params=params,
         )
         return self._json_response([resp], 200)["output"]
+
+    def ls_recurse(
+        self,
+        machine: str,
+        path: str,
+        *,
+        show_hidden: bool = False,
+        delimiter: str = "/",
+        max_calls: int | None = None,
+        raise_on_max: bool = True,
+    ) -> Iterable[t.LsFileRecurse]:
+        """Recursively yield paths, depth first."""
+        stack = [{"path": path, "type": "d", "_initial": True}]
+        calls_made = 0
+        while stack:
+            current_path = stack.pop()
+            if not current_path.get("_initial"):
+                yield current_path
+            if current_path["type"] == "d":
+                if max_calls and calls_made > max_calls:
+                    if raise_on_max:
+                        raise RecursionError("Too many API calls, aborting.")
+                    return
+                calls_made += 1
+                for child in self.list_files(
+                    machine, current_path["path"], show_hidden=show_hidden
+                ):
+                    child["path"] = delimiter.join((current_path["path"], child["name"]))
+                    child["depth"] = current_path.get("depth", -1) + 1
+                    stack.append(child)
+
 
     def mkdir(self, machine, target_path, p=None):
         """Creates a new directory.
@@ -872,7 +909,7 @@ class Firecrest:
             json_response["task_id"], "200", itertools.cycle([1, 5, 10])
         )
 
-    def poll(self, machine, jobs=None, start_time=None, end_time=None):
+    def poll(self, machine, jobs=None, start_time=None, end_time=None) -> list[JobAcct]:
         """Retrieves information about submitted jobs.
         This call uses the `sacct` command.
 

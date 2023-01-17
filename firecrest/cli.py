@@ -612,6 +612,9 @@ def invalidate(config: LazyConfig, task_id: str):
     echo_success()
 
 
+# TODO how to remove files from object storage?
+
+
 @main.group()
 def tasks():
     """`/tasks` endpoints."""

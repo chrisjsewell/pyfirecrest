@@ -1,14 +1,15 @@
 """A simple CLI for pyfirecrest."""
 from __future__ import annotations
-from datetime import datetime
 
+from datetime import datetime
+import json
 from pathlib import Path
 import time
 
-import firecrest as fc
-import json
-import yaml
 import click
+import yaml
+
+import firecrest as fc
 
 
 class LazyConfig:

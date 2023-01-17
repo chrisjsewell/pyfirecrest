@@ -4,15 +4,17 @@ See https://firecrest-api.cscs.ch/
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from functools import lru_cache
+import logging
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from pprint import pprint
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 import time
 from typing import Any, Literal
 from uuid import uuid4
-import logging
 
 import firecrest
 
@@ -61,25 +63,42 @@ class CalcNode(Data):
 REMOTE_FOLDER_NAME = "aiida"
 
 
-def run_calculation(computer: Computer, calc: CalcNode):
+async def run_multiple_calculations(
+    computer: Computer, calcs: list[CalcNode]
+) -> dict[str, list[Data]]:
+    """Run multiple calculations on a remote computer."""
+    return {
+        uid: nodes
+        for uid, nodes in await asyncio.gather(
+            *[run_calculation(computer, calc) for calc in calcs]
+        )
+    }
+
+
+async def run_calculation(computer: Computer, calc: CalcNode):
     """Run a process on a remote computer."""
 
     with TemporaryDirectory() as in_tmpdir:
         in_tmpdir = Path(in_tmpdir)
-        prepare_for_submission(calc, in_tmpdir)
-        copy_to_remote(computer, calc, in_tmpdir)
+        await prepare_for_submission(calc, in_tmpdir)
+        await asyncio.sleep(0)
+        await copy_to_remote(computer, calc, in_tmpdir)
+        await asyncio.sleep(0)
 
-    submit_on_remote(computer, calc)
+    await submit_on_remote(computer, calc)
+    await asyncio.sleep(0)
 
-    poll_until_finished(computer, calc)
+    await poll_until_finished(computer, calc)
+    await asyncio.sleep(0)
 
     with TemporaryDirectory() as out_tmpdir:
         out_tmpdir = Path(out_tmpdir)
-        copy_from_remote(computer, calc, out_tmpdir)
-        return parse_output_files(calc, out_tmpdir)
+        await copy_from_remote(computer, calc, out_tmpdir)
+        await asyncio.sleep(0)
+        return calc.uuid, await parse_output_files(calc, out_tmpdir)
 
 
-def prepare_for_submission(calc: CalcNode, local_path: Path):
+async def prepare_for_submission(calc: CalcNode, local_path: Path):
     """Prepares the (local) calculation folder with all inputs,
     ready to be copied to the compute resource.
     """
@@ -97,7 +116,7 @@ def prepare_for_submission(calc: CalcNode, local_path: Path):
     )
 
 
-def copy_to_remote(computer: Computer, calc: CalcNode, local_path: Path):
+async def copy_to_remote(computer: Computer, calc: CalcNode, local_path: Path):
     """Copy the calculation inputs to the compute resource."""
     remote_folder = computer.work_path / REMOTE_FOLDER_NAME / calc.uuid
     LOGGER.info("copying to remote folder: %s", remote_folder)
@@ -124,10 +143,10 @@ def copy_to_remote(computer: Computer, calc: CalcNode, local_path: Path):
                         raise RuntimeError(
                             f"timeout waiting for upload to finish of: {target_path}"
                         )
-                    time.sleep(1)
+                    await asyncio.sleep(1)
 
 
-def submit_on_remote(computer: Computer, calc: CalcNode):
+async def submit_on_remote(computer: Computer, calc: CalcNode):
     """Run the calculation on the compute resource."""
     script_path = computer.work_path / REMOTE_FOLDER_NAME / calc.uuid / "job.sh"
     LOGGER.info("submitting on remote: %s", script_path)
@@ -136,7 +155,7 @@ def submit_on_remote(computer: Computer, calc: CalcNode):
     calc.attributes["job_id"] = result["jobid"]
 
 
-def poll_until_finished(computer: Computer, calc: CalcNode):
+async def poll_until_finished(computer: Computer, calc: CalcNode):
     """Poll the compute resource until the calculation is finished."""
     LOGGER.info("polling until finished: %s", calc.uuid)
     client = _client_from_computer(computer)
@@ -145,11 +164,12 @@ def poll_until_finished(computer: Computer, calc: CalcNode):
         result = client.poll(computer.machine_name, [calc.attributes["job_id"]])[0]
         if result["state"] == "COMPLETED":
             break
+        await asyncio.sleep(1)
     else:
         raise RuntimeError("timeout waiting for calculation to finish")
 
 
-def copy_from_remote(computer: Computer, calc: CalcNode, local_folder: Path):
+async def copy_from_remote(computer: Computer, calc: CalcNode, local_folder: Path):
     """Copy the calculation outputs from the compute resource."""
     remote_folder = computer.work_path / REMOTE_FOLDER_NAME / calc.uuid
     LOGGER.info("copying from remote folder: %s", remote_folder)
@@ -176,7 +196,7 @@ def copy_from_remote(computer: Computer, calc: CalcNode, local_folder: Path):
                 down_obj.finish_download(str(local_path))
 
 
-def parse_output_files(calc: CalcNode, local_path: Path) -> list[Data]:
+async def parse_output_files(calc: CalcNode, local_path: Path) -> list[Data]:
     """Parse the calculation outputs."""
     LOGGER.info("parsing output files: %s", local_path)
     paths = []
@@ -184,7 +204,7 @@ def parse_output_files(calc: CalcNode, local_path: Path) -> list[Data]:
         paths.append(
             path.relative_to(local_path).as_posix() + ("/" if path.is_dir() else "")
         )
-    return [calc, Data(attributes={"paths": paths})]
+    return [Data(attributes={"paths": paths})]
 
 
 @lru_cache(maxsize=256)
@@ -213,7 +233,7 @@ def main():
     logging.basicConfig(
         format="%(asctime)s:%(name)s:%(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        level=logging.DEBUG,
+        level=logging.INFO,
     )
 
     computer = Computer(
@@ -226,9 +246,10 @@ def main():
         small_file_size_mb=5,
     )
 
-    calc = CalcNode()
-    nodes = run_calculation(computer, calc)
-    print(nodes)
+    calc1 = CalcNode()
+    calc2 = CalcNode()
+    nodes = asyncio.run(run_multiple_calculations(computer, [calc1, calc2]))
+    pprint(nodes)
 
 
 if __name__ == "__main__":

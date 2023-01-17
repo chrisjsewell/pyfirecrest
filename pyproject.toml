@@ -33,3 +33,7 @@ testing = [
     "httpretty>=1.0.3",
     "pytest>=5.3",
 ]
+
+[project.scripts]
+firecrest = "firecrest.cli:main"
+mock_calc = "firecrest.mock_calc:main"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import itertools
 from typing import Iterable
+from urllib.parse import urlparse
 import jwt
 import pathlib
 import requests
@@ -163,7 +164,7 @@ class ExternalUpload(ExternalStorage):
         """
         c = self.object_storage_data["command"]
         # LOCAL FIX FOR MAC
-        # c = c.replace("192.168.220.19", "localhost")
+        c = c.replace("192.168.220.19", "localhost")
         command = subprocess.run(
             shlex.split(c), stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
@@ -213,12 +214,19 @@ class ExternalDownload(ExternalStorage):
         """Finish the download process.
 
         :param target_path: the local path to save the file
-        :type target_path: string or binary stream
+        :type target_path: string or binary def stream
         :rtype: None
         """
         url = self.object_storage_data
         # LOCAL FIX FOR MAC
         # url = url.replace("192.168.220.19", "localhost")
+        # TODO the above fix works, slightly so that the request does not hang
+        # however, when using the URLs I'm still getting a 403 error:
+        # "The request signature we calculated does not match the signature you provided. 
+        # Check your key and signing method.""
+        # so for now, I'm just going to swap out the URL, with the actual location on disk
+        # where the files are stored for the demo!
+        url = "file:///Users/chrisjsewell/Documents/GitHub/firecrest/deploy/demo/minio" + urlparse(url).path
         context = (
             open(target_path, "wb")
             if isinstance(target_path, str)
@@ -227,7 +235,6 @@ class ExternalDownload(ExternalStorage):
         )
         with urllib.request.urlopen(url) as response, context as out_file:
             shutil.copyfileobj(response, out_file)
-
 
 class Firecrest:
     """
@@ -499,27 +506,26 @@ class Firecrest:
         show_hidden: bool = False,
         delimiter: str = "/",
         max_calls: int | None = None,
-        raise_on_max: bool = True,
+        max_depth: int | None = None,
     ) -> Iterable[t.LsFileRecurse]:
         """Recursively yield paths, depth first."""
-        stack = [{"path": path, "type": "d", "_initial": True}]
+        stack = [{"depth": 0, "path": path, "type": "d", "_initial": True}]
         calls_made = 0
         while stack:
             current_path = stack.pop()
             if not current_path.get("_initial"):
                 yield current_path
             if current_path["type"] == "d":
-                if max_calls and calls_made > max_calls:
-                    if raise_on_max:
+                if max_depth is None or current_path["depth"] < max_depth:
+                    if max_calls and calls_made >= max_calls:
                         raise RecursionError("Too many API calls, aborting.")
-                    return
-                calls_made += 1
-                for child in self.list_files(
-                    machine, current_path["path"], show_hidden=show_hidden
-                ):
-                    child["path"] = delimiter.join((current_path["path"], child["name"]))
-                    child["depth"] = current_path.get("depth", -1) + 1
-                    stack.append(child)
+                    calls_made += 1
+                    for child in self.list_files(
+                        machine, current_path["path"], show_hidden=show_hidden
+                    ):
+                        child["path"] = delimiter.join((current_path["path"], child["name"]))
+                        child["depth"] = current_path["depth"] + 1
+                        stack.append(child)
 
 
     def mkdir(self, machine, target_path, p=None):
@@ -1211,7 +1217,7 @@ class Firecrest:
             json_response["task_id"], "200", itertools.cycle([1, 5, 10])
         )
 
-    def external_upload(self, machine, source_path, target_path):
+    def external_upload(self, machine, source_path, target_path) -> ExternalUpload:
         """Non blocking call for the upload of larger files.
 
         :param machine: the machine where the filesystem belongs to
@@ -1220,8 +1226,6 @@ class Firecrest:
         :type source_path: string
         :param target_path: the target path in the machine's filesystem
         :type target_path: string
-        :returns: an ExternalUpload object
-        :rtype: ExternalUpload
         """
         resp = self._post_request(
             endpoint="/storage/xfer-external/upload",
